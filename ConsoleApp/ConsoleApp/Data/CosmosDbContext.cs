@@ -1,4 +1,5 @@
 using ConsoleApp.Models;
+using Microsoft.Azure.Cosmos;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 
@@ -29,5 +30,22 @@ public class CosmosDbContext : DbContext
     {
         modelBuilder.Entity<LogItem>().ToContainer("logs"); //container name
         modelBuilder.Entity<LogItem>().HasKey(log => log.Id);
+    }
+    
+    public async Task<bool> CheckConnectionAsync()
+    {
+        try
+        {
+            var client = new CosmosClient(_configuration["CosmosDb:Endpoint"], _configuration["CosmosDb:PrimaryKey"]);
+            var database = client.GetDatabase(_configuration["CosmosDb:DatabaseName"]);
+            var container = database.GetContainer("logs");
+            var response = await container.ReadContainerAsync();
+            return response.StatusCode == System.Net.HttpStatusCode.OK;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Connection check failed: {ex.Message}");
+            return false;
+        }
     }
 }

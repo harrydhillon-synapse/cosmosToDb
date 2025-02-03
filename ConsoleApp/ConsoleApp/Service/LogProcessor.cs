@@ -15,7 +15,7 @@ public class LogProcessor
     {
         Console.WriteLine("ProcessLogs method called.");
 
-        var logs = _cosmosDbContext.LogItems.Take(5).ToList();
+        var logs = _cosmosDbContext.LogItems.OrderBy(log => log.DateTime).Take(5).ToList();
         Console.WriteLine($"Number of logs retrieved: {logs.Count}");
 
         foreach (var log in logs)

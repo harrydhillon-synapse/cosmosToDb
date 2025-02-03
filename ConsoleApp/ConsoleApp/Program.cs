@@ -8,16 +8,22 @@ using Microsoft.Extensions.Hosting;
 
 class Program
 {
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         var host = CreateHostBuilder(args).Build();
         
-        var logProcessor = host.Services.GetRequiredService<LogProcessor>();
-        logProcessor?.ProcessLogs();
-        
+        var dbContext = host.Services.GetRequiredService<CosmosDbContext>();
+        var isConnected = await dbContext.CheckConnectionAsync();
+        Console.WriteLine($"Database connection status: {(isConnected ? "Connected" : "Not Connected")}");
+
+        if (isConnected)
+        {
+            var logProcessor = host.Services.GetRequiredService<LogProcessor>();
+            logProcessor?.ProcessLogs();
+        }
     }
     
-    public static IHostBuilder CreateHostBuilder(string[] args) =>
+    static IHostBuilder CreateHostBuilder(string[] args) =>
         Host.CreateDefaultBuilder(args)
             .ConfigureAppConfiguration((hostingContext, config) =>
             {
