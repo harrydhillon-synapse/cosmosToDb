@@ -12,16 +12,16 @@ class Program
         var host = CreateHostBuilder(args).Build();
 
         var logger = host.Services.GetRequiredService<ILogger<Program>>();
-        var sqliteConnectionString = host.Services.GetRequiredService<string>();
+        var sqlServerConnectionString = host.Services.GetRequiredService<string>();
 
-        if (string.IsNullOrEmpty(sqliteConnectionString))
+        if (string.IsNullOrEmpty(sqlServerConnectionString))
         {
-            logger.LogError("SQLite connection string is null or empty.");
+            logger.LogError("SQL Server connection string is null or empty.");
             return;
         }
 
         logger.LogInformation("Starting database initialization.");
-        DatabaseInitializer.InitializeDatabase(sqliteConnectionString, logger);
+        DatabaseInitializer.InitializeDatabase(sqlServerConnectionString, logger);
 
         var dbContext = host.Services.GetRequiredService<CosmosDbContext>();
         var isConnected = await dbContext.CheckConnectionAsync();
@@ -50,16 +50,16 @@ class Program
             .ConfigureServices((context, services) =>
             {
                 var configuration = context.Configuration;
-                var sqliteConnectionString = configuration.GetSection("Sqlite").GetValue<string>("ConnectionString");
+                var sqlServerConnectionString = configuration.GetSection("SqlServer").GetValue<string>("ConnectionString");
 
-                if (string.IsNullOrEmpty(sqliteConnectionString))
+                if (string.IsNullOrEmpty(sqlServerConnectionString))
                 {
-                    throw new InvalidOperationException("SQLite connection string is null or empty.");
+                    throw new InvalidOperationException("SQL Server connection string is null or empty.");
                 }
 
                 services.AddSingleton<CosmosDbContext>();
                 services.AddTransient<LogProcessor>();
                 services.AddLogging(configure => configure.AddConsole());
-                services.AddSingleton(sqliteConnectionString);
+                services.AddSingleton(sqlServerConnectionString);
             });
 }

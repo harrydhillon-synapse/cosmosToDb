@@ -3,34 +3,35 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using ConsoleApp.Models;
 using Newtonsoft.Json;
+using Microsoft.Data.SqlClient;
 
 namespace ConsoleApp.Service
 {
     /// <summary>
-    /// Processes logs from Cosmos DB and inserts them into a local SQLite database.
+    /// Processes logs from Cosmos DB and inserts them into a local SQL Server database.
     /// </summary>
     public class LogProcessor
     {
         private readonly CosmosDbContext _cosmosDbContext;
         private readonly ILogger<LogProcessor> _logger;
-        private readonly string _sqliteConnectionString;
+        private readonly string _sqlServerConnectionString;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="LogProcessor"/> class.
         /// </summary>
         /// <param name="cosmosDbContext">The Cosmos DB context.</param>
         /// <param name="logger">The logger instance.</param>
-        /// <param name="sqliteConnectionString">The SQLite connection string.</param>
+        /// <param name="sqlServerConnectionString">The SQL Server connection string.</param>
         public LogProcessor(CosmosDbContext cosmosDbContext, ILogger<LogProcessor> logger,
-            string sqliteConnectionString)
+            string sqlServerConnectionString)
         {
             _cosmosDbContext = cosmosDbContext;
             _logger = logger;
-            _sqliteConnectionString = sqliteConnectionString;
+            _sqlServerConnectionString = sqlServerConnectionString;
         }
 
         /// <summary>
-        /// Processes logs from Cosmos DB and inserts them into the local SQLite database.
+        /// Processes logs from Cosmos DB and inserts them into the local SQL Server database.
         /// </summary>
         public async Task ProcessLogsAsync()
         {
@@ -39,7 +40,7 @@ namespace ConsoleApp.Service
             var logs = await _cosmosDbContext.GetLogItemsAsync();
             _logger.LogInformation("Number of logs retrieved: {Count}", logs.Count);
 
-            using (var connection = new SqliteConnection(_sqliteConnectionString))
+            using (var connection = new SqlConnection(_sqlServerConnectionString))
             {
                 connection.Open();
                 foreach (var log in logs)
@@ -57,25 +58,31 @@ namespace ConsoleApp.Service
         /// <summary>
         /// Inserts an order log into the orders table.
         /// </summary>
-        /// <param name="connection">The SQLite connection.</param>
+        /// <param name="connection">The SQL Server connection.</param>
         /// <param name="log">The log item to insert.</param>
-        private void InsertOrder(SqliteConnection connection, CosmosLogItem log)
+        private void InsertOrder(SqlConnection connection, CosmosLogItem log)
         {
-            var command = new SqliteCommand(@"
-                        INSERT INTO orders (order_id, niko_order_id, url, status_code, completed_at, process_count)
-                        VALUES (@OrderId, @NikoOrderId, @Url, @StatusCode, @CompletedAt, 1)
-                        ON CONFLICT(order_id) DO UPDATE SET
-                            niko_order_id = excluded.niko_order_id,
-                            url = excluded.url,
-                            status_code = excluded.status_code,
-                            completed_at = excluded.completed_at,
-                            process_count = orders.process_count + 1;", connection);
+            var command = new SqlCommand(@"
+                            IF EXISTS (SELECT 1 FROM orders WHERE niko_order_id = @NikoOrderId)
+                            BEGIN
+                                UPDATE orders
+                                SET status_code = @StatusCode,
+                                    completed_at = IIF(@StatusCode=200,@CompletedAt,null),
+                                    process_count = process_count + 1
+                                WHERE niko_order_id = @NikoOrderId;
+                            END
+                            ELSE
+                            BEGIN
+                                INSERT INTO orders (niko_order_id, url, status_code, first_attempt_at, completed_at, process_count)
+                                VALUES (@NikoOrderId, @Url, @StatusCode, @FirstAttemptAt, IIF(@StatusCode=200,@CompletedAt,null), 1);
+                            END", connection);
 
-            command.Parameters.AddWithValue("@OrderId", log.Id);
+            //command.Parameters.AddWithValue("@OrderId", log.Id);
             command.Parameters.AddWithValue("@NikoOrderId", log.NikoOrderId);
             command.Parameters.AddWithValue("@Url", log.Url);
             command.Parameters.AddWithValue("@StatusCode", log.StatusCode);
             command.Parameters.AddWithValue("@CompletedAt", log.DateTime);
+            command.Parameters.AddWithValue("@FirstAttemptAt", log.DateTime);
 
             command.ExecuteNonQuery();
             _logger.LogInformation("Inserted or updated order with Id: {Id}", log.Id);
@@ -84,19 +91,19 @@ namespace ConsoleApp.Service
         /// <summary>
         /// Inserts a failed order log into the order_failures table.
         /// </summary>
-        /// <param name="connection">The SQLite connection.</param>
+        /// <param name="connection">The SQL Server connection.</param>
         /// <param name="log">The log item to insert.</param>
-        private void InsertOrderFailure(SqliteConnection connection, CosmosLogItem log)
+        private void InsertOrderFailure(SqlConnection connection, CosmosLogItem log)
         {
             var (errorCode, message) = GetErrorDetails(log);
             var failureReason = $"{errorCode}: {message}";
 
-            var command = new SqliteCommand(@"
-                        INSERT INTO order_failures (order_id, niko_order_id, failure_timestamp, url, status_code, failure_reason)
-                        VALUES (@OrderId, @NikoOrderId, @FailureTimestamp, @Url, @StatusCode, @FailureReason);",
+            var command = new SqlCommand(@"
+                            INSERT INTO order_failures (niko_order_id, failure_timestamp, url, status_code, failure_reason)
+                            VALUES (@NikoOrderId, @FailureTimestamp, @Url, @StatusCode, @FailureReason);",
                 connection);
 
-            command.Parameters.AddWithValue("@OrderId", log.Id);
+            //command.Parameters.AddWithValue("@OrderId", log.Id);
             command.Parameters.AddWithValue("@NikoOrderId", log.NikoOrderId);
             command.Parameters.AddWithValue("@FailureTimestamp", log.DateTime);
             command.Parameters.AddWithValue("@Url", log.Url);
@@ -110,20 +117,20 @@ namespace ConsoleApp.Service
         /// <summary>
         /// Updates the orders table with the failure date for a given order.
         /// </summary>
-        /// <param name="connection">The SQLite connection.</param>
+        /// <param name="connection">The SQL Server connection.</param>
         /// <param name="log">The log item to update.</param>
-        private void UpdateOrderWithFailure(SqliteConnection connection, CosmosLogItem log)
+        private void UpdateOrderWithFailure(SqlConnection connection, CosmosLogItem log)
         {
-            var command = new SqliteCommand(@"
-                        UPDATE orders
-                        SET last_failed_at = @LastFailedAt
-                        WHERE order_id = @OrderId", connection);
+            var command = new SqlCommand(@"
+                            UPDATE orders
+                            SET last_failed_at = @LastFailedAt
+                            WHERE niko_order_id = @NikoOrderId", connection);
 
-            command.Parameters.AddWithValue("@OrderId", log.Id);
+            command.Parameters.AddWithValue("@NikoOrderId", log.NikoOrderId);
             command.Parameters.AddWithValue("@LastFailedAt", log.DateTime);
 
             command.ExecuteNonQuery();
-            _logger.LogInformation("Updated order with failure date for Id: {Id}", log.Id);
+            _logger.LogInformation("Updated order with failure date for Id: {Id}", log.NikoOrderId);
         }
 
         /// <summary>
